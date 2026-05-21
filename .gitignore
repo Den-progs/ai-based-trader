@@ -1,0 +1,63 @@
+# ===== Secrets — NEVER commit these =====
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+secrets.json
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== Virtual environments =====
+venv/
+.venv/
+env/
+ENV/
+
+# ===== Bot runtime data =====
+trade_journal.json
+*.log
+logs/
+data/cache/
+backtest_results/
+
+# ===== VS Code =====
+.vscode/
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# ===== Claude Code =====
+.claude/
+
+# ===== macOS =====
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# ===== Windows (for your friend) =====
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# ===== JetBrains IDEs =====
+.idea/
+
+# ===== Misc =====
+*.bak
+*.tmp
+*.swp
+*~
