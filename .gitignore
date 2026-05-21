@@ -61,3 +61,8 @@ $RECYCLE.BIN/
 *.tmp
 *.swp
 *~
+
+#whatever testes I write, I don't want them to be committed
+tests/
+
+test_discord.py
