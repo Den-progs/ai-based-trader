@@ -1,5 +1,5 @@
 """
-trader.py — Alpaca paper-trading wrappers (buy, sell, get position, get price).
+trader.py - Alpaca paper-trading wrappers (buy, sell, get position, get price).
 Always paper mode unless two env vars confirm live trading.
 """
 
@@ -26,7 +26,7 @@ _live = (
 PAPER = not _live
 
 if not PAPER:
-    print("[trader] WARNING: LIVE TRADING ENABLED — real money at risk!")
+    print("[trader] WARNING: LIVE TRADING ENABLED - real money at risk!")
 else:
     print("[trader] Paper trading mode active.")
 
@@ -52,7 +52,7 @@ def is_market_open() -> bool:
 
 
 def is_near_close(minutes: int = 10) -> bool:
-    """Return True if the market closes within `minutes` minutes. Handles early closes."""
+    """Return True if the market closes within `minutes` minutes."""
     try:
         clock = trading_client.get_clock()
         if not clock.is_open:
@@ -74,7 +74,7 @@ def close_all_stock_positions() -> list[str]:
 
     closed = []
     for p in positions:
-        if _is_crypto(p.symbol):  # skip crypto — it trades 24/7
+        if _is_crypto(p.symbol):
             continue
         try:
             sell(p.symbol, float(p.qty))
@@ -95,7 +95,7 @@ def get_account_cash() -> float:
 
 
 def get_stock_positions_by_pl() -> list[dict]:
-    """Return open stock positions sorted by unrealized P&L ascending (worst performers first)."""
+    """Return open stock positions sorted by unrealized P&L ascending (worst first)."""
     try:
         positions = trading_client.get_all_positions()
         stock_positions = [
@@ -106,7 +106,7 @@ def get_stock_positions_by_pl() -> list[dict]:
                 "unrealized_pl": float(p.unrealized_pl),
             }
             for p in positions
-            if not _is_crypto(p.symbol)  # exclude crypto
+            if not _is_crypto(p.symbol)
         ]
         return sorted(stock_positions, key=lambda x: x["unrealized_pl"])
     except Exception as e:
@@ -115,7 +115,7 @@ def get_stock_positions_by_pl() -> list[dict]:
 
 
 def get_price(symbol: str) -> float:
-    """Return the latest ask price for a stock symbol. Retries twice on connection errors."""
+    """Return the latest ask price for a stock symbol. Retries twice on errors."""
     for attempt in range(3):
         try:
             request = StockLatestQuoteRequest(symbol_or_symbols=symbol)
@@ -129,7 +129,7 @@ def get_price(symbol: str) -> float:
 
 
 def get_crypto_price(symbol: str) -> float:
-    """Return the latest ask price for a crypto pair. Retries twice on connection errors."""
+    """Return the latest ask price for a crypto pair. Retries twice on errors."""
     for attempt in range(3):
         try:
             request = CryptoLatestQuoteRequest(symbol_or_symbols=symbol)
@@ -143,7 +143,7 @@ def get_crypto_price(symbol: str) -> float:
 
 
 def get_position(symbol: str) -> float:
-    """Return how many shares/coins we hold. Returns 0.0 if no position."""
+    """Return how many shares/coins we hold. 0.0 if no position."""
     try:
         position = trading_client.get_open_position(symbol)
         return float(position.qty)
@@ -161,7 +161,7 @@ def get_position_value(symbol: str) -> float:
 
 
 def get_position_pl(symbol: str) -> float:
-    """Return unrealized profit/loss in dollars for our position. 0.0 if no position."""
+    """Return unrealized P&L in dollars. 0.0 if no position."""
     try:
         position = trading_client.get_open_position(symbol)
         return float(position.unrealized_pl)
@@ -169,8 +169,18 @@ def get_position_pl(symbol: str) -> float:
         return 0.0
 
 
+def get_position_pl_pct(symbol: str) -> float:
+    """Return unrealized P&L as decimal fraction (0.05 = +5%, -0.03 = -3%).
+    0.0 if no position. Used by take-profit and stop-loss checks."""
+    try:
+        position = trading_client.get_open_position(symbol)
+        return float(position.unrealized_plpc)
+    except Exception:
+        return 0.0
+
+
 def get_all_positions() -> list[dict]:
-    """Return all open positions as dicts with symbol, qty, and unrealized_pl."""
+    """Return all open positions as dicts with symbol, qty, and P&L (dollars + percent)."""
     try:
         positions = trading_client.get_all_positions()
         return [
@@ -178,6 +188,7 @@ def get_all_positions() -> list[dict]:
                 "symbol": p.symbol,
                 "qty": float(p.qty),
                 "unrealized_pl": float(p.unrealized_pl),
+                "unrealized_plpc": float(p.unrealized_plpc),
                 "market_value": float(p.market_value),
             }
             for p in positions
@@ -188,7 +199,7 @@ def get_all_positions() -> list[dict]:
 
 
 def buy(symbol: str, qty: float) -> dict:
-    """Submit a market buy order. Uses GTC for crypto (24/7), DAY for stocks."""
+    """Submit a market buy order. GTC for crypto (24/7), DAY for stocks."""
     tif = TimeInForce.GTC if _is_crypto(symbol) else TimeInForce.DAY
     order_request = MarketOrderRequest(
         symbol=symbol,
@@ -201,7 +212,7 @@ def buy(symbol: str, qty: float) -> dict:
 
 
 def sell(symbol: str, qty: float) -> dict:
-    """Submit a market sell order. Uses GTC for crypto (24/7), DAY for stocks."""
+    """Submit a market sell order. GTC for crypto (24/7), DAY for stocks."""
     tif = TimeInForce.GTC if _is_crypto(symbol) else TimeInForce.DAY
     order_request = MarketOrderRequest(
         symbol=symbol,

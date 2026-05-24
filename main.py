@@ -1,5 +1,5 @@
 """
-main.py — aggressive day trading loop.
+main.py - aggressive day trading loop.
 Stocks: parallel analysis across up to 50 symbols, orders only when NYSE is open,
         scales into positions up to MAX_POSITION_SHARES, liquidates everything
         EOD_LIQUIDATE_MINUTES_BEFORE_CLOSE minutes before market close.
@@ -14,7 +14,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import config
 import discord_notify as discord
 from trader import (
-    get_price, get_crypto_price, get_position, get_position_value, get_position_pl,
+    get_price, get_crypto_price, get_position, get_position_value,
+    get_position_pl, get_position_pl_pct,
     buy, sell, is_market_open, is_near_close, close_all_stock_positions,
     get_account_cash, get_stock_positions_by_pl, get_all_positions,
 )
@@ -31,43 +32,85 @@ _buy_lock = threading.Lock()
 _last_buy: dict[str, float] = read_last_buy()  # persisted so cooldowns survive restarts
 
 
-def free_up_cash(needed: float, exclude_symbol: str) -> float:
+def free_up_cash(needed: float, exclude_symbol: str) -> bool:
     """
     Sell worst-performing stock positions (by unrealized P&L) until we've freed
-    at least `needed` dollars. Skips `exclude_symbol` (the stock we're about to buy).
-    Returns the total market value of what was sold.
+    at least `needed` dollars, then WAIT for the orders to actually fill before
+    returning. Skips `exclude_symbol`.
+
+    Why we wait: Alpaca submit_order is async. Without waiting, the caller would
+    immediately try to BUY before the SELL has settled into available cash, and
+    the BUY would fail with "insufficient buying power" - silently locking in
+    losses without ever opening the intended position.
+
+    Returns True if cash reached the target within CASH_FILL_WAIT_SECONDS,
+    False otherwise (caller should skip the BUY).
     """
-    freed = 0.0
-    positions = get_stock_positions_by_pl()  # worst P&L first
+    starting_cash = get_account_cash()
+    target_cash = starting_cash + needed
+
+    positions = get_stock_positions_by_pl()
+    estimated_freed = 0.0
+    any_sold = False
 
     for pos in positions:
-        if freed >= needed:
+        if estimated_freed >= needed:
             break
         if pos["symbol"] == exclude_symbol:
             continue
         try:
             sell(pos["symbol"], pos["qty"])
-            freed += pos["market_value"]
+            any_sold = True
+            estimated_freed += pos["market_value"]
             pl = pos["unrealized_pl"]
             print(f"[main] Sold {pos['symbol']} (P&L ${pl:+.2f}) to fund new trade")
             discord.send(f"REBALANCE: sold {pos['symbol']} (P&L ${pl:+.2f}) to free cash")
         except Exception as e:
             print(f"[main] Could not sell {pos['symbol']} during rebalance: {e}")
 
-    return freed
+    if not any_sold:
+        return False
+
+    # Poll cash up to CASH_FILL_WAIT_SECONDS. Accept 95% of target - fees and
+    # tiny price drift mean we rarely get the full estimated_freed back.
+    for _ in range(config.CASH_FILL_WAIT_SECONDS):
+        time.sleep(1)
+        if get_account_cash() >= target_cash * 0.95:
+            return True
+
+    final_cash = get_account_cash()
+    if final_cash >= target_cash * 0.95:
+        return True
+    print(f"[main] Cash freed only ${final_cash - starting_cash:.2f} of ${needed:.2f} needed within {config.CASH_FILL_WAIT_SECONDS}s.")
+    return False
 
 
 def _process_stock(symbol: str, market_open: bool) -> None:
     """Analyse one stock and act. Runs inside a thread."""
     try:
-        # Take-profit: sell everything if we're up enough, skip Llama entirely
-        if market_open and config.TAKE_PROFIT_DOLLARS > 0:
-            pl = get_position_pl(symbol)
-            if pl >= config.TAKE_PROFIT_DOLLARS:
+        # Risk checks first - bypass Llama entirely when triggered.
+        # Percent-based so they scale across position sizes.
+        if market_open:
+            pl_pct = get_position_pl_pct(symbol)
+
+            # Take-profit: sell winners at +TAKE_PROFIT_PCT
+            if config.TAKE_PROFIT_PCT > 0 and pl_pct >= config.TAKE_PROFIT_PCT:
                 held = get_position(symbol)
                 if held > 0:
-                    order = sell(symbol, held)
-                    msg = f"TAKE PROFIT {symbol} — P&L ${pl:+.2f}, sold {held} shares"
+                    pl_dollars = get_position_pl(symbol)
+                    sell(symbol, held)
+                    msg = f"TAKE PROFIT {symbol} - {pl_pct:+.2%} (${pl_dollars:+.2f}), sold {held} shares"
+                    discord.send(msg)
+                    print(f"[stock][{symbol}] {msg}")
+                    return
+
+            # Stop-loss: cut losers at -STOP_LOSS_PCT. Critical risk control.
+            if config.STOP_LOSS_PCT > 0 and pl_pct <= -config.STOP_LOSS_PCT:
+                held = get_position(symbol)
+                if held > 0:
+                    pl_dollars = get_position_pl(symbol)
+                    sell(symbol, held)
+                    msg = f"STOP LOSS {symbol} - {pl_pct:+.2%} (${pl_dollars:+.2f}), sold {held} shares"
                     discord.send(msg)
                     print(f"[stock][{symbol}] {msg}")
                     return
@@ -79,12 +122,12 @@ def _process_stock(symbol: str, market_open: bool) -> None:
         confidence = decision["confidence"]
         reason = decision["reason"]
 
-        print(f"[stock][{symbol}] ${price:.2f} → {action} (conf={confidence:.2f}) — {reason}")
+        print(f"[stock][{symbol}] ${price:.2f} -> {action} (conf={confidence:.2f}) - {reason}")
 
         if not market_open:
             if action in ("BUY", "SELL") and confidence >= config.CONFIDENCE_THRESHOLD:
                 append_pending_signal(symbol, action, confidence, reason, price)
-                print(f"[stock][{symbol}] Market closed — signal saved.")
+                print(f"[stock][{symbol}] Market closed - signal saved.")
             return
 
         if action == "BUY" and confidence >= config.CONFIDENCE_THRESHOLD:
@@ -92,7 +135,7 @@ def _process_stock(symbol: str, market_open: bool) -> None:
                 since_last = time.time() - _last_buy.get(symbol, 0)
                 if since_last < config.BUY_COOLDOWN_SECONDS:
                     wait = int(config.BUY_COOLDOWN_SECONDS - since_last)
-                    print(f"[stock][{symbol}] Cooldown — {wait}s left before next BUY.")
+                    print(f"[stock][{symbol}] Cooldown - {wait}s left before next BUY.")
                 else:
                     held = get_position(symbol)
                     if held >= config.MAX_POSITION_SHARES:
@@ -102,8 +145,7 @@ def _process_stock(symbol: str, market_open: bool) -> None:
                         cash = get_account_cash()
                         if cash < cost:
                             print(f"[stock][{symbol}] Low cash (${cash:.2f}), selling worst positions to fund ${cost:.2f} trade.")
-                            freed = free_up_cash(needed=cost, exclude_symbol=symbol)
-                            if freed + cash < cost:
+                            if not free_up_cash(needed=cost, exclude_symbol=symbol):
                                 print(f"[stock][{symbol}] Still not enough cash after rebalance, skipping.")
                                 return
                         order = buy(symbol, config.QTY_PER_TRADE)
@@ -137,17 +179,31 @@ def _process_stock(symbol: str, market_open: bool) -> None:
 def _process_crypto(symbol: str) -> None:
     """Analyse one crypto pair and act. Runs inside a thread."""
     try:
-        # Take-profit: sell everything if we're up enough, skip Llama entirely
-        if config.TAKE_PROFIT_DOLLARS > 0:
-            pl = get_position_pl(symbol)
-            if pl >= config.TAKE_PROFIT_DOLLARS:
-                held = get_position(symbol)
-                if held > 0:
-                    order = sell(symbol, held)
-                    msg = f"TAKE PROFIT {symbol} — P&L ${pl:+.2f}, sold {held} coins"
-                    discord.send(msg)
-                    print(f"[crypto][{symbol}] {msg}")
-                    return
+        # Risk checks first - bypass Llama entirely when triggered.
+        # Crypto trades 24/7 so stop-loss is the ONLY auto-exit (no EOD liquidation).
+        pl_pct = get_position_pl_pct(symbol)
+
+        # Take-profit: sell winners at +TAKE_PROFIT_PCT
+        if config.TAKE_PROFIT_PCT > 0 and pl_pct >= config.TAKE_PROFIT_PCT:
+            held = get_position(symbol)
+            if held > 0:
+                pl_dollars = get_position_pl(symbol)
+                sell(symbol, held)
+                msg = f"TAKE PROFIT {symbol} - {pl_pct:+.2%} (${pl_dollars:+.2f}), sold {held} coins"
+                discord.send(msg)
+                print(f"[crypto][{symbol}] {msg}")
+                return
+
+        # Stop-loss: cut losers at -STOP_LOSS_PCT
+        if config.STOP_LOSS_PCT > 0 and pl_pct <= -config.STOP_LOSS_PCT:
+            held = get_position(symbol)
+            if held > 0:
+                pl_dollars = get_position_pl(symbol)
+                sell(symbol, held)
+                msg = f"STOP LOSS {symbol} - {pl_pct:+.2%} (${pl_dollars:+.2f}), sold {held} coins"
+                discord.send(msg)
+                print(f"[crypto][{symbol}] {msg}")
+                return
 
         price = get_crypto_price(symbol)
         decision = ask_llama(symbol, price, news=get_headlines(symbol))
@@ -156,13 +212,13 @@ def _process_crypto(symbol: str) -> None:
         confidence = decision["confidence"]
         reason = decision["reason"]
 
-        print(f"[crypto][{symbol}] ${price:.2f} → {action} (conf={confidence:.2f}) — {reason}")
+        print(f"[crypto][{symbol}] ${price:.2f} -> {action} (conf={confidence:.2f}) - {reason}")
 
         if action == "BUY" and confidence >= config.CONFIDENCE_THRESHOLD:
             since_last = time.time() - _last_buy.get(symbol, 0)
             if since_last < config.BUY_COOLDOWN_SECONDS:
                 wait = int(config.BUY_COOLDOWN_SECONDS - since_last)
-                print(f"[crypto][{symbol}] Cooldown — {wait}s left before next BUY.")
+                print(f"[crypto][{symbol}] Cooldown - {wait}s left before next BUY.")
             else:
                 pos_value = get_position_value(symbol)
                 if pos_value >= config.MAX_CRYPTO_POSITION_VALUE:
@@ -202,7 +258,7 @@ def stock_cycle(symbols: list[str], market_open: bool) -> None:
     with ThreadPoolExecutor(max_workers=config.THREAD_WORKERS) as pool:
         futures = {pool.submit(_process_stock, s, market_open): s for s in symbols}
         for f in as_completed(futures):
-            f.result()  # surfaces any unhandled exceptions
+            f.result()
 
 
 def crypto_cycle(symbols: list[str]) -> None:
@@ -218,7 +274,7 @@ def eod_liquidate(today: str) -> None:
     if _eod_liquidated_on == today:
         return
     _eod_liquidated_on = today
-    print("[main] EOD liquidation — closing all stock positions.")
+    print("[main] EOD liquidation - closing all stock positions.")
     discord.send("EOD liquidation: selling all stock positions before market close.")
     closed = close_all_stock_positions()
     if closed:
@@ -229,23 +285,32 @@ def eod_liquidate(today: str) -> None:
 
 
 def startup_profit_check() -> None:
-    """On startup, sell any positions already above the take-profit threshold."""
-    if config.TAKE_PROFIT_DOLLARS <= 0:
+    """On startup, immediately close positions past take-profit OR stop-loss
+    thresholds. Catches positions that breached while bot was down."""
+    if config.TAKE_PROFIT_PCT <= 0 and config.STOP_LOSS_PCT <= 0:
         return
     positions = get_all_positions()
     if not positions:
         print("[startup] No open positions.")
         return
-    print(f"[startup] Checking {len(positions)} open positions for take-profit...")
+    print(f"[startup] Checking {len(positions)} open positions for take-profit / stop-loss...")
     for pos in positions:
-        pl = pos["unrealized_pl"]
         symbol = pos["symbol"]
         qty = pos["qty"]
-        print(f"[startup] {symbol}: qty={qty}, P&L=${pl:+.2f}")
-        if pl >= config.TAKE_PROFIT_DOLLARS:
+        pl_dollars = pos["unrealized_pl"]
+        pl_pct = pos["unrealized_plpc"]
+        print(f"[startup] {symbol}: qty={qty}, P&L={pl_pct:+.2%} (${pl_dollars:+.2f})")
+
+        action = None
+        if config.TAKE_PROFIT_PCT > 0 and pl_pct >= config.TAKE_PROFIT_PCT:
+            action = "TAKE PROFIT"
+        elif config.STOP_LOSS_PCT > 0 and pl_pct <= -config.STOP_LOSS_PCT:
+            action = "STOP LOSS"
+
+        if action:
             try:
                 sell(symbol, qty)
-                msg = f"STARTUP TAKE PROFIT {symbol} — P&L ${pl:+.2f}, sold {qty}"
+                msg = f"STARTUP {action} {symbol} - {pl_pct:+.2%} (${pl_dollars:+.2f}), sold {qty}"
                 discord.send(msg)
                 print(f"[startup] {msg}")
             except Exception as e:
@@ -253,7 +318,7 @@ def startup_profit_check() -> None:
 
 
 def main() -> None:
-    discord.send("Trader bot started — aggressive day trading mode. Paper only.")
+    discord.send("Trader bot started - aggressive day trading mode. Paper only.")
     print("[main] Bot started. Press Ctrl+C to stop.")
     startup_profit_check()
 

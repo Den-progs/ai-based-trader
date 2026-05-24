@@ -1,5 +1,5 @@
 """
-config.py — all bot settings in one place. Change values here, not in other files.
+config.py - all bot settings in one place. Change values here, not in other files.
 """
 
 # Seconds between trading cycles. Lower = more aggressive.
@@ -32,6 +32,13 @@ EOD_LIQUIDATE_MINUTES_BEFORE_CLOSE = 10
 # Minimum seconds between two BUY orders for the same symbol
 BUY_COOLDOWN_SECONDS = 600  # 10 minutes
 
-# Auto-sell a position when unrealized profit hits this dollar amount
-# Set to 0 to disable
-TAKE_PROFIT_DOLLARS = 150
+# -- Risk controls ------------------------------------------------------------
+# Take-profit at this percent gain. 0.05 = +5%. 0 to disable.
+TAKE_PROFIT_PCT = 0.05
+
+# Stop-loss at this percent loss. 0.03 = -3%. 0 to disable.
+# Critical: without this, losers held until EOD (stocks) or forever (crypto).
+STOP_LOSS_PCT = 0.03
+
+# Seconds to wait for sell orders to fill before retrying a buy.
+CASH_FILL_WAIT_SECONDS = 10
