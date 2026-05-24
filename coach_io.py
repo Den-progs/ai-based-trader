@@ -13,6 +13,7 @@ STRATEGY_FILE = BASE_DIR / "strategy.txt"
 WATCHLIST_FILE = BASE_DIR / "watchlist.json"
 CRYPTO_WATCHLIST_FILE = BASE_DIR / "crypto_watchlist.json"
 PENDING_SIGNALS_FILE = BASE_DIR / "pending_signals.json"
+LAST_BUY_FILE = BASE_DIR / "last_buy.json"
 
 DEFAULT_STRATEGY = "Hold cash. Wait for a clear BUY signal with confidence >= 0.7 before entering."
 DEFAULT_WATCHLIST = ["AAPL", "MSFT", "NVDA"]
@@ -92,3 +93,18 @@ def append_pending_signal(symbol: str, action: str, confidence: float, reason: s
 def clear_pending_signals() -> None:
     """Wipe pending signals after the daily coach has consumed them."""
     PENDING_SIGNALS_FILE.write_text("[]", encoding="utf-8")
+
+
+def read_last_buy() -> dict[str, float]:
+    """Load persisted buy timestamps so cooldowns survive restarts."""
+    if LAST_BUY_FILE.exists():
+        try:
+            return json.loads(LAST_BUY_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def save_last_buy(data: dict[str, float]) -> None:
+    """Persist buy timestamps to disk."""
+    LAST_BUY_FILE.write_text(json.dumps(data), encoding="utf-8")

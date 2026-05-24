@@ -20,7 +20,7 @@ from trader import (
 )
 from llama_brain import ask_llama
 from news import get_headlines
-from coach_io import read_watchlist, read_crypto_watchlist, append_pending_signal
+from coach_io import read_watchlist, read_crypto_watchlist, append_pending_signal, read_last_buy, save_last_buy
 
 # Tracks whether we've already liquidated today so we don't spam sell orders
 _eod_liquidated_on: str = ""
@@ -28,7 +28,7 @@ _eod_liquidated_on: str = ""
 # Prevents two threads from simultaneously deciding to free up cash and
 # selling the same position twice
 _buy_lock = threading.Lock()
-_last_buy: dict[str, float] = {}  # symbol -> timestamp of last buy
+_last_buy: dict[str, float] = read_last_buy()  # persisted so cooldowns survive restarts
 
 
 def free_up_cash(needed: float, exclude_symbol: str) -> float:
@@ -108,6 +108,7 @@ def _process_stock(symbol: str, market_open: bool) -> None:
                                 return
                         order = buy(symbol, config.QTY_PER_TRADE)
                         _last_buy[symbol] = time.time()
+                        save_last_buy(_last_buy)
                         msg = f"BUY {config.QTY_PER_TRADE}x {symbol} @ ${price:.2f} (held {held:.0f}) | {reason}"
                         discord.send(msg)
                         print(f"[stock][{symbol}] Order placed: {order}")
@@ -170,6 +171,7 @@ def _process_crypto(symbol: str) -> None:
                     qty = round(config.CRYPTO_TRADE_DOLLARS / price, 6)
                     order = buy(symbol, qty)
                     _last_buy[symbol] = time.time()
+                    save_last_buy(_last_buy)
                     msg = f"BUY ${config.CRYPTO_TRADE_DOLLARS} of {symbol} ({qty} coins @ ${price:.2f}) | {reason}"
                     discord.send(msg)
                     print(f"[crypto][{symbol}] Order placed: {order}")

@@ -1,8 +1,7 @@
 """
-news.py — fetch headlines from three sources in parallel:
+news.py — fetch headlines from two sources in parallel:
   1. Alpaca News API
   2. Google News RSS  (no API key, built-in XML parser)
-  3. Reddit           (public JSON API, no key needed)
 """
 
 import os
@@ -14,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
-import requests
 from alpaca.data.historical import NewsClient
 from alpaca.data.requests import NewsRequest
 from dotenv import load_dotenv
@@ -26,13 +24,10 @@ _alpaca_client = NewsClient(
     os.environ["ALPACA_SECRET_KEY"],
 )
 
-_REDDIT_HEADERS = {"User-Agent": "ai-trader-bot/1.0"}
-
-# Cache headlines per symbol for 2 minutes so we don't hammer Reddit/Google
-# every 5-second cycle with 65 symbols
+# Cache headlines per symbol for 5 minutes
 _cache: dict[str, tuple[float, list[str]]] = {}
 _cache_lock = threading.Lock()
-CACHE_TTL = 120  # seconds
+CACHE_TTL = 300  # seconds
 
 
 def _alpaca(symbol: str, n: int) -> list[str]:
@@ -71,41 +66,10 @@ def _google(symbol: str, n: int) -> list[str]:
         return []
 
 
-def _reddit(symbol: str, n: int) -> list[str]:
-    if "/" in symbol:
-        query = symbol.split("/")[0]  # BTC/USD → BTC
-        subreddits = ["CryptoCurrency", "CryptoMarkets"]
-    else:
-        query = symbol
-        subreddits = ["wallstreetbets", "stocks"]
-
-    headlines = []
-    for sub in subreddits:
-        try:
-            url = (
-                f"https://www.reddit.com/r/{sub}/search.json"
-                f"?q={query}&sort=hot&limit={n}&t=day&restrict_sr=1"
-            )
-            resp = requests.get(url, headers=_REDDIT_HEADERS, timeout=8)
-            resp.raise_for_status()
-            posts = resp.json().get("data", {}).get("children", [])
-            for post in posts:
-                title = post.get("data", {}).get("title", "")
-                if title:
-                    headlines.append(f"[r/{sub}] {title}")
-        except Exception as e:
-            print(f"[news][reddit] r/{sub} {symbol}: {e}")
-        if len(headlines) >= n:
-            break
-
-    return headlines[:n]
-
-
 def get_headlines(symbol: str, max_headlines: int = 5) -> list[str]:
     """
-    Return headlines from Alpaca + Google News + Reddit, fetched in parallel.
-    Results are cached per symbol for CACHE_TTL seconds to avoid rate-limiting
-    Reddit and Google when the same symbol is processed every few seconds.
+    Return headlines from Alpaca + Google News, fetched in parallel.
+    Cached per symbol for CACHE_TTL seconds.
     """
     now = time.time()
     with _cache_lock:
@@ -114,13 +78,12 @@ def get_headlines(symbol: str, max_headlines: int = 5) -> list[str]:
             if now - ts < CACHE_TTL:
                 return cached
 
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=2) as pool:
         f_alpaca = pool.submit(_alpaca, symbol, max_headlines)
         f_google = pool.submit(_google, symbol, max_headlines)
-        f_reddit = pool.submit(_reddit, symbol, max_headlines)
 
     results = []
-    for f in (f_alpaca, f_google, f_reddit):
+    for f in (f_alpaca, f_google):
         try:
             results.extend(f.result())
         except Exception:
