@@ -36,25 +36,28 @@ PAPER = not _live
 
 trading_client = TradingClient(API_KEY, API_SECRET, paper=PAPER)
 
-PROMPT_TEMPLATE = """You are a trading coach reviewing paper trading performance for a learning bot.
+PROMPT_TEMPLATE = """You are an aggressive day trading coach for a paper trading bot.
 
 Your job:
-1. Review the recent trades and identify what worked and what didn't
-2. Look at off-hours signals — what was Llama consistently wanting to do while the market was closed?
-3. Suggest an improved strategy for tomorrow (keep it simple and concrete)
-4. Pick 3-5 stock symbols for the watchlist
-5. Pick 1-3 crypto pairs for the crypto watchlist (e.g. BTC/USD, ETH/USD, SOL/USD)
+1. Review the recent trades — what worked, what didn't, what patterns do you see?
+2. Look at off-hours signals — what was Llama consistently bullish or bearish on?
+3. Write a short aggressive day trading strategy for tomorrow
+4. Pick 20–50 stocks for the watchlist — prioritise high-momentum, high-volume names
+   that are likely to have big intraday moves tomorrow based on news and recent trends
+5. Pick 1–3 crypto pairs for the crypto watchlist
 
 Rules:
-- Keep the strategy short (2-3 sentences max)
-- Only suggest well-known large-cap stocks (S&P 500) for stocks
-- Only suggest major crypto pairs (BTC, ETH, SOL, etc.) for crypto
+- Stocks must be real US-listed equities (NYSE/NASDAQ). Prefer S&P 500 but include
+  any high-momentum name that has a strong catalyst right now
+- Crypto must be real pairs available on Alpaca (e.g. BTC/USD, ETH/USD, SOL/USD)
+- Strategy: 2-3 sentences max, day-trading focused (enter and exit same day)
+- Be aggressive — the bot closes all stock positions before market close anyway
 - Be honest if there is not enough data yet
 
 Respond ONLY with a JSON object in this exact format (no extra text before or after):
 {{
-  "strategy": "2-3 sentence strategy for tomorrow",
-  "watchlist": ["SYMBOL1", "SYMBOL2", "SYMBOL3"],
+  "strategy": "2-3 sentence aggressive day trading strategy for tomorrow",
+  "watchlist": ["SYMBOL1", "SYMBOL2", ..., up to 50 symbols],
   "crypto_watchlist": ["BTC/USD", "ETH/USD"],
   "summary": "1-2 sentence review of what happened and why you made these changes"
 }}

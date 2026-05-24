@@ -1,131 +1,153 @@
 """
-main.py — trading loop. Runs every 30 seconds.
-Stocks: analyses every cycle, only places orders when NYSE is open.
-Crypto: analyses and trades every cycle (markets are 24/7).
-Off-hours stock signals are saved to pending_signals.json for the daily review.
+main.py — aggressive day trading loop.
+Stocks: parallel analysis across up to 50 symbols, orders only when NYSE is open,
+        scales into positions up to MAX_POSITION_SHARES, liquidates everything
+        EOD_LIQUIDATE_MINUTES_BEFORE_CLOSE minutes before market close.
+Crypto: parallel analysis and trading 24/7.
+Off-hours stock signals saved to pending_signals.json for the daily review.
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import config
 import discord_notify as discord
-from trader import get_price, get_crypto_price, get_position, buy, sell, is_market_open
+from trader import (
+    get_price, get_crypto_price, get_position,
+    buy, sell, is_market_open, is_near_close, close_all_stock_positions,
+)
 from llama_brain import ask_llama
 from news import get_headlines
-from coach_io import (
-    read_watchlist,
-    read_crypto_watchlist,
-    append_pending_signal,
-)
+from coach_io import read_watchlist, read_crypto_watchlist, append_pending_signal
 
-LOOP_INTERVAL = 30  # seconds between each cycle
-QTY_PER_TRADE = 1   # shares / coins to buy or sell per decision
-CONFIDENCE_THRESHOLD = 0.7
+# Tracks whether we've already liquidated today so we don't spam sell orders
+_eod_liquidated_on: str = ""
+
+
+def _process_stock(symbol: str, market_open: bool) -> None:
+    """Analyse one stock and act. Runs inside a thread."""
+    try:
+        price = get_price(symbol)
+        decision = ask_llama(symbol, price, news=get_headlines(symbol))
+
+        action = decision["action"]
+        confidence = decision["confidence"]
+        reason = decision["reason"]
+
+        print(f"[stock][{symbol}] ${price:.2f} → {action} (conf={confidence:.2f}) — {reason}")
+
+        if not market_open:
+            if action in ("BUY", "SELL") and confidence >= config.CONFIDENCE_THRESHOLD:
+                append_pending_signal(symbol, action, confidence, reason, price)
+                print(f"[stock][{symbol}] Market closed — signal saved.")
+            return
+
+        if action == "BUY" and confidence >= config.CONFIDENCE_THRESHOLD:
+            held = get_position(symbol)
+            if held >= config.MAX_POSITION_SHARES:
+                print(f"[stock][{symbol}] Max position reached ({held} shares), skipping BUY.")
+            else:
+                order = buy(symbol, config.QTY_PER_TRADE)
+                msg = f"BUY {config.QTY_PER_TRADE}x {symbol} @ ${price:.2f} (held {held:.0f}) | {reason}"
+                discord.send(msg)
+                print(f"[stock][{symbol}] Order placed: {order}")
+
+        elif action == "SELL" and confidence >= config.CONFIDENCE_THRESHOLD:
+            held = get_position(symbol)
+            if held > 0:
+                qty = min(config.QTY_PER_TRADE, held)
+                order = sell(symbol, qty)
+                msg = f"SELL {qty}x {symbol} @ ${price:.2f} | {reason}"
+                discord.send(msg)
+                print(f"[stock][{symbol}] Order placed: {order}")
+            else:
+                print(f"[stock][{symbol}] SELL signal but no position, skipping.")
+
+    except ConnectionError as e:
+        msg = f"[stock][{symbol}] Ollama error: {e}"
+        print(msg)
+        discord.send(f"ERROR: {msg}")
+    except Exception as e:
+        msg = f"[stock][{symbol}] Error: {e}"
+        print(msg)
+        discord.send(f"ERROR: {msg}")
+
+
+def _process_crypto(symbol: str) -> None:
+    """Analyse one crypto pair and act. Runs inside a thread."""
+    try:
+        price = get_crypto_price(symbol)
+        decision = ask_llama(symbol, price, news=get_headlines(symbol))
+
+        action = decision["action"]
+        confidence = decision["confidence"]
+        reason = decision["reason"]
+
+        print(f"[crypto][{symbol}] ${price:.2f} → {action} (conf={confidence:.2f}) — {reason}")
+
+        if action == "BUY" and confidence >= config.CONFIDENCE_THRESHOLD:
+            held = get_position(symbol)
+            if held >= config.MAX_POSITION_SHARES:
+                print(f"[crypto][{symbol}] Max position reached, skipping BUY.")
+            else:
+                order = buy(symbol, config.QTY_PER_TRADE)
+                msg = f"BUY {config.QTY_PER_TRADE}x {symbol} @ ${price:.2f} | {reason}"
+                discord.send(msg)
+                print(f"[crypto][{symbol}] Order placed: {order}")
+
+        elif action == "SELL" and confidence >= config.CONFIDENCE_THRESHOLD:
+            held = get_position(symbol)
+            if held > 0:
+                qty = min(config.QTY_PER_TRADE, held)
+                order = sell(symbol, qty)
+                msg = f"SELL {qty}x {symbol} @ ${price:.2f} | {reason}"
+                discord.send(msg)
+                print(f"[crypto][{symbol}] Order placed: {order}")
+            else:
+                print(f"[crypto][{symbol}] SELL signal but no position, skipping.")
+
+    except ConnectionError as e:
+        msg = f"[crypto][{symbol}] Ollama error: {e}"
+        print(msg)
+        discord.send(f"ERROR: {msg}")
+    except Exception as e:
+        msg = f"[crypto][{symbol}] Error: {e}"
+        print(msg)
+        discord.send(f"ERROR: {msg}")
 
 
 def stock_cycle(symbols: list[str], market_open: bool) -> None:
-    """
-    Analyse each stock every cycle.
-    If market is open: place orders (with position check).
-    If market is closed: save signal to pending_signals.json for later review.
-    """
-    for symbol in symbols:
-        try:
-            price = get_price(symbol)
-            decision = ask_llama(symbol, price, news=get_headlines(symbol))
-
-            action = decision["action"]
-            confidence = decision["confidence"]
-            reason = decision["reason"]
-
-            print(f"[stock][{symbol}] ${price:.2f} → {action} (conf={confidence:.2f}) — {reason}")
-
-            if not market_open:
-                # Save the signal so the daily coach can see what Llama wanted to do
-                if action in ("BUY", "SELL") and confidence >= CONFIDENCE_THRESHOLD:
-                    append_pending_signal(symbol, action, confidence, reason, price)
-                    print(f"[stock][{symbol}] Market closed — signal saved for later review.")
-                continue
-
-            if action == "BUY" and confidence >= CONFIDENCE_THRESHOLD:
-                if get_position(symbol) > 0:
-                    print(f"[stock][{symbol}] Already holding position, skipping BUY.")
-                else:
-                    order = buy(symbol, QTY_PER_TRADE)
-                    msg = f"BUY {QTY_PER_TRADE}x {symbol} @ ${price:.2f} | {reason}"
-                    discord.send(msg)
-                    print(f"[stock][{symbol}] Order placed: {order}")
-
-            elif action == "SELL" and confidence >= CONFIDENCE_THRESHOLD:
-                held = get_position(symbol)
-                if held > 0:
-                    qty = min(QTY_PER_TRADE, held)
-                    order = sell(symbol, qty)
-                    msg = f"SELL {qty}x {symbol} @ ${price:.2f} | {reason}"
-                    discord.send(msg)
-                    print(f"[stock][{symbol}] Order placed: {order}")
-                else:
-                    print(f"[stock][{symbol}] SELL signal but no position held, skipping.")
-
-        except ConnectionError as e:
-            msg = f"[stock][{symbol}] Ollama connection error: {e}"
-            print(msg)
-            discord.send(f"ERROR: {msg}")
-
-        except Exception as e:
-            msg = f"[stock][{symbol}] Unexpected error: {e}"
-            print(msg)
-            discord.send(f"ERROR: {msg}")
+    with ThreadPoolExecutor(max_workers=config.THREAD_WORKERS) as pool:
+        futures = {pool.submit(_process_stock, s, market_open): s for s in symbols}
+        for f in as_completed(futures):
+            f.result()  # surfaces any unhandled exceptions
 
 
 def crypto_cycle(symbols: list[str]) -> None:
-    """
-    Analyse and trade crypto every cycle — no market hours restriction.
-    Same position check applies: only buy if we don't already hold it.
-    """
-    for symbol in symbols:
-        try:
-            price = get_crypto_price(symbol)
-            decision = ask_llama(symbol, price, news=get_headlines(symbol))
+    with ThreadPoolExecutor(max_workers=config.THREAD_WORKERS) as pool:
+        futures = {pool.submit(_process_crypto, s): s for s in symbols}
+        for f in as_completed(futures):
+            f.result()
 
-            action = decision["action"]
-            confidence = decision["confidence"]
-            reason = decision["reason"]
 
-            print(f"[crypto][{symbol}] ${price:.2f} → {action} (conf={confidence:.2f}) — {reason}")
-
-            if action == "BUY" and confidence >= CONFIDENCE_THRESHOLD:
-                if get_position(symbol) > 0:
-                    print(f"[crypto][{symbol}] Already holding position, skipping BUY.")
-                else:
-                    order = buy(symbol, QTY_PER_TRADE)
-                    msg = f"BUY {QTY_PER_TRADE}x {symbol} @ ${price:.2f} | {reason}"
-                    discord.send(msg)
-                    print(f"[crypto][{symbol}] Order placed: {order}")
-
-            elif action == "SELL" and confidence >= CONFIDENCE_THRESHOLD:
-                held = get_position(symbol)
-                if held > 0:
-                    qty = min(QTY_PER_TRADE, held)
-                    order = sell(symbol, qty)
-                    msg = f"SELL {qty}x {symbol} @ ${price:.2f} | {reason}"
-                    discord.send(msg)
-                    print(f"[crypto][{symbol}] Order placed: {order}")
-                else:
-                    print(f"[crypto][{symbol}] SELL signal but no position held, skipping.")
-
-        except ConnectionError as e:
-            msg = f"[crypto][{symbol}] Ollama connection error: {e}"
-            print(msg)
-            discord.send(f"ERROR: {msg}")
-
-        except Exception as e:
-            msg = f"[crypto][{symbol}] Unexpected error: {e}"
-            print(msg)
-            discord.send(f"ERROR: {msg}")
+def eod_liquidate(today: str) -> None:
+    """Sell all stock positions near market close. Runs once per day."""
+    global _eod_liquidated_on
+    if _eod_liquidated_on == today:
+        return
+    _eod_liquidated_on = today
+    print("[main] EOD liquidation — closing all stock positions.")
+    discord.send("EOD liquidation: selling all stock positions before market close.")
+    closed = close_all_stock_positions()
+    if closed:
+        discord.send(f"EOD closed: {', '.join(closed)}")
+        print(f"[main] EOD closed: {closed}")
+    else:
+        print("[main] EOD: no open stock positions to close.")
 
 
 def main() -> None:
-    discord.send("Trader bot started. Paper mode active.")
+    discord.send("Trader bot started — aggressive day trading mode. Paper only.")
     print("[main] Bot started. Press Ctrl+C to stop.")
 
     while True:
@@ -133,15 +155,18 @@ def main() -> None:
         crypto = read_crypto_watchlist()
         market_open = is_market_open()
 
-        status = "OPEN" if market_open else "CLOSED (stock signals saved, crypto still trading)"
-        print(f"\n[main] Market: {status}")
-        print(f"[main] Stocks: {stocks} | Crypto: {crypto}")
+        today = time.strftime("%Y-%m-%d")
 
-        stock_cycle(stocks, market_open)
-        crypto_cycle(crypto)
+        if market_open and is_near_close(config.EOD_LIQUIDATE_MINUTES_BEFORE_CLOSE):
+            eod_liquidate(today)
+        else:
+            status = "OPEN" if market_open else "CLOSED (signals saved, crypto trading)"
+            print(f"\n[main] Market: {status} | {len(stocks)} stocks | {len(crypto)} crypto")
+            stock_cycle(stocks, market_open)
+            crypto_cycle(crypto)
 
-        print(f"[main] Sleeping {LOOP_INTERVAL}s...")
-        time.sleep(LOOP_INTERVAL)
+        print(f"[main] Sleeping {config.LOOP_INTERVAL}s...")
+        time.sleep(config.LOOP_INTERVAL)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ Always paper mode unless two env vars confirm live trading.
 
 import os
 import time
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -42,6 +43,39 @@ def is_market_open() -> bool:
     except Exception as e:
         print(f"[trader] Could not check market clock: {e}")
         return False
+
+
+def is_near_close(minutes: int = 10) -> bool:
+    """Return True if the market closes within `minutes` minutes. Handles early closes."""
+    try:
+        clock = trading_client.get_clock()
+        if not clock.is_open:
+            return False
+        seconds_left = (clock.next_close - datetime.now(timezone.utc)).total_seconds()
+        return seconds_left <= minutes * 60
+    except Exception as e:
+        print(f"[trader] Could not check market close time: {e}")
+        return False
+
+
+def close_all_stock_positions() -> list[str]:
+    """Sell every open stock position at market. Returns list of symbols closed."""
+    try:
+        positions = trading_client.get_all_positions()
+    except Exception as e:
+        print(f"[trader] Could not fetch positions for EOD close: {e}")
+        return []
+
+    closed = []
+    for p in positions:
+        if "/" in p.symbol:  # skip crypto — it trades 24/7
+            continue
+        try:
+            sell(p.symbol, float(p.qty))
+            closed.append(p.symbol)
+        except Exception as e:
+            print(f"[trader] EOD close failed for {p.symbol}: {e}")
+    return closed
 
 
 def get_price(symbol: str) -> float:
