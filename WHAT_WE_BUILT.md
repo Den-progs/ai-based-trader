@@ -1,6 +1,6 @@
 # What We Built — AI Paper Trader
 
-A fully automated paper trading bot that uses two AI models to make stock and crypto decisions, reviews its own performance daily, and notifies you on Discord.
+A fully automated paper trading bot that uses two AI models to make stock and crypto decisions, reviews its own performance daily, and notifies you on Discord. Built by two people, each running their own bot with their own Alpaca paper account and API keys.
 
 ---
 

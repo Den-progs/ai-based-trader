@@ -28,6 +28,7 @@ ENV/
 data/trade_journal.json
 data/pending_signals.json
 data/last_buy.json
+data/activity_log.json
 *.log
 logs/
 data/cache/

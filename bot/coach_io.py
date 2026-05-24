@@ -14,6 +14,9 @@ WATCHLIST_FILE = BASE_DIR / "watchlist.json"
 CRYPTO_WATCHLIST_FILE = BASE_DIR / "crypto_watchlist.json"
 PENDING_SIGNALS_FILE = BASE_DIR / "pending_signals.json"
 LAST_BUY_FILE = BASE_DIR / "last_buy.json"
+ACTIVITY_LOG_FILE = BASE_DIR / "activity_log.json"
+
+MAX_ACTIVITY_LOG = 100
 
 DEFAULT_STRATEGY = "Hold cash. Wait for a clear BUY signal with confidence >= 0.7 before entering."
 DEFAULT_WATCHLIST = ["AAPL", "MSFT", "NVDA"]
@@ -108,3 +111,31 @@ def read_last_buy() -> dict[str, float]:
 def save_last_buy(data: dict[str, float]) -> None:
     """Persist buy timestamps to disk."""
     LAST_BUY_FILE.write_text(json.dumps(data), encoding="utf-8")
+
+
+def read_activity_log() -> list[dict]:
+    """Return recent bot decisions for the dashboard."""
+    if ACTIVITY_LOG_FILE.exists():
+        try:
+            return json.loads(ACTIVITY_LOG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return []
+
+
+def append_activity_log(symbol: str, action: str, confidence: float, reason: str, price: float, asset_type: str = "stock") -> None:
+    """Save one Llama decision to the activity log. Thread-safe. Keeps last MAX_ACTIVITY_LOG entries."""
+    with _signals_lock:
+        log = read_activity_log()
+        log.append({
+            "symbol": symbol,
+            "action": action,
+            "confidence": round(confidence, 3),
+            "reason": reason,
+            "price": round(price, 4),
+            "type": asset_type,
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+        if len(log) > MAX_ACTIVITY_LOG:
+            log = log[-MAX_ACTIVITY_LOG:]
+        ACTIVITY_LOG_FILE.write_text(json.dumps(log, indent=2), encoding="utf-8")

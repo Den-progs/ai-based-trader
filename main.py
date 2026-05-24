@@ -21,7 +21,7 @@ from bot.trader import (
 )
 from bot.llama_brain import ask_llama
 from bot.news import get_headlines
-from bot.coach_io import read_watchlist, read_crypto_watchlist, append_pending_signal, read_last_buy, save_last_buy
+from bot.coach_io import read_watchlist, read_crypto_watchlist, append_pending_signal, read_last_buy, save_last_buy, append_activity_log
 
 # Tracks whether we've already liquidated today so we don't spam sell orders
 _eod_liquidated_on: str = ""
@@ -123,6 +123,7 @@ def _process_stock(symbol: str, market_open: bool) -> None:
         reason = decision["reason"]
 
         print(f"[stock][{symbol}] ${price:.2f} -> {action} (conf={confidence:.2f}) - {reason}")
+        append_activity_log(symbol, action, confidence, reason, price, "stock")
 
         if not market_open:
             if action in ("BUY", "SELL") and confidence >= config.CONFIDENCE_THRESHOLD:
@@ -213,6 +214,7 @@ def _process_crypto(symbol: str) -> None:
         reason = decision["reason"]
 
         print(f"[crypto][{symbol}] ${price:.2f} -> {action} (conf={confidence:.2f}) - {reason}")
+        append_activity_log(symbol, action, confidence, reason, price, "crypto")
 
         if action == "BUY" and confidence >= config.CONFIDENCE_THRESHOLD:
             since_last = time.time() - _last_buy.get(symbol, 0)
