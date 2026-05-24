@@ -3,7 +3,7 @@ config.py — all bot settings in one place. Change values here, not in other fi
 """
 
 # Seconds between trading cycles. Lower = more aggressive.
-LOOP_INTERVAL = 5
+LOOP_INTERVAL = 30
 
 # -- Stocks -------------------------------------------------------------------
 # Shares to buy or sell per single stock order
@@ -24,7 +24,7 @@ MAX_CRYPTO_POSITION_VALUE = 2000
 CONFIDENCE_THRESHOLD = 0.70
 
 # Parallel Llama calls -- lets 50 stocks finish in ~20s instead of ~3 minutes
-THREAD_WORKERS = 8
+THREAD_WORKERS = 4
 
 # Sell all stock positions this many minutes before market close
 EOD_LIQUIDATE_MINUTES_BEFORE_CLOSE = 10
