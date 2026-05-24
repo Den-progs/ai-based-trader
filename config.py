@@ -21,7 +21,7 @@ MAX_CRYPTO_POSITION_VALUE = 2000
 
 # -- General ------------------------------------------------------------------
 # Minimum Llama confidence to act
-CONFIDENCE_THRESHOLD = 0.55
+CONFIDENCE_THRESHOLD = 0.70
 
 # Parallel Llama calls -- lets 50 stocks finish in ~20s instead of ~3 minutes
 THREAD_WORKERS = 8
