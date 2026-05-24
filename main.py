@@ -12,15 +12,15 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import config
-import discord_notify as discord
-from trader import (
+import bot.discord_notify as discord
+from bot.trader import (
     get_price, get_crypto_price, get_position, get_position_value, get_position_pl,
     buy, sell, is_market_open, is_near_close, close_all_stock_positions,
     get_account_cash, get_stock_positions_by_pl, get_all_positions,
 )
-from llama_brain import ask_llama
-from news import get_headlines
-from coach_io import read_watchlist, read_crypto_watchlist, append_pending_signal, read_last_buy, save_last_buy
+from bot.llama_brain import ask_llama
+from bot.news import get_headlines
+from bot.coach_io import read_watchlist, read_crypto_watchlist, append_pending_signal, read_last_buy, save_last_buy
 
 # Tracks whether we've already liquidated today so we don't spam sell orders
 _eod_liquidated_on: str = ""
