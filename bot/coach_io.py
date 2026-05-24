@@ -8,7 +8,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-BASE_DIR = Path(__file__).parent
+BASE_DIR = Path(__file__).parent.parent / "data"
 STRATEGY_FILE = BASE_DIR / "strategy.txt"
 WATCHLIST_FILE = BASE_DIR / "watchlist.json"
 CRYPTO_WATCHLIST_FILE = BASE_DIR / "crypto_watchlist.json"

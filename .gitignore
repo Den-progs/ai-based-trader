@@ -25,9 +25,9 @@ env/
 ENV/
 
 # ===== Bot runtime data =====
-trade_journal.json
-pending_signals.json
-last_buy.json
+data/trade_journal.json
+data/pending_signals.json
+data/last_buy.json
 *.log
 logs/
 data/cache/

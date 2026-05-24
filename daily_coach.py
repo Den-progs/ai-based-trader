@@ -14,13 +14,13 @@ from alpaca.trading.requests import GetOrdersRequest
 from alpaca.trading.enums import QueryOrderStatus
 from dotenv import load_dotenv
 
-import discord_notify as discord
-from coach_io import (
+import bot.discord_notify as discord
+from bot.coach_io import (
     read_strategy, read_watchlist, write_strategy, write_watchlist,
     read_crypto_watchlist, write_crypto_watchlist,
     read_pending_signals, clear_pending_signals,
 )
-from news import get_headlines
+from bot.news import get_headlines
 
 load_dotenv()
 
@@ -238,4 +238,5 @@ def run() -> None:
 
 
 if __name__ == "__main__":
+    run()
     run()
