@@ -16,7 +16,7 @@ import discord_notify as discord
 from trader import (
     get_price, get_crypto_price, get_position, get_position_value, get_position_pl,
     buy, sell, is_market_open, is_near_close, close_all_stock_positions,
-    get_account_cash, get_stock_positions_by_pl,
+    get_account_cash, get_stock_positions_by_pl, get_all_positions,
 )
 from llama_brain import ask_llama
 from news import get_headlines
@@ -226,9 +226,34 @@ def eod_liquidate(today: str) -> None:
         print("[main] EOD: no open stock positions to close.")
 
 
+def startup_profit_check() -> None:
+    """On startup, sell any positions already above the take-profit threshold."""
+    if config.TAKE_PROFIT_DOLLARS <= 0:
+        return
+    positions = get_all_positions()
+    if not positions:
+        print("[startup] No open positions.")
+        return
+    print(f"[startup] Checking {len(positions)} open positions for take-profit...")
+    for pos in positions:
+        pl = pos["unrealized_pl"]
+        symbol = pos["symbol"]
+        qty = pos["qty"]
+        print(f"[startup] {symbol}: qty={qty}, P&L=${pl:+.2f}")
+        if pl >= config.TAKE_PROFIT_DOLLARS:
+            try:
+                sell(symbol, qty)
+                msg = f"STARTUP TAKE PROFIT {symbol} — P&L ${pl:+.2f}, sold {qty}"
+                discord.send(msg)
+                print(f"[startup] {msg}")
+            except Exception as e:
+                print(f"[startup] Could not sell {symbol}: {e}")
+
+
 def main() -> None:
     discord.send("Trader bot started — aggressive day trading mode. Paper only.")
     print("[main] Bot started. Press Ctrl+C to stop.")
+    startup_profit_check()
 
     while True:
         stocks = read_watchlist()

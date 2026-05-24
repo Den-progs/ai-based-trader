@@ -163,6 +163,24 @@ def get_position_pl(symbol: str) -> float:
         return 0.0
 
 
+def get_all_positions() -> list[dict]:
+    """Return all open positions as dicts with symbol, qty, and unrealized_pl."""
+    try:
+        positions = trading_client.get_all_positions()
+        return [
+            {
+                "symbol": p.symbol,
+                "qty": float(p.qty),
+                "unrealized_pl": float(p.unrealized_pl),
+                "market_value": float(p.market_value),
+            }
+            for p in positions
+        ]
+    except Exception as e:
+        print(f"[trader] Could not fetch positions: {e}")
+        return []
+
+
 def buy(symbol: str, qty: float) -> dict:
     """Submit a market buy order. Uses GTC for crypto (24/7), DAY for stocks."""
     tif = TimeInForce.GTC if "/" in symbol else TimeInForce.DAY
