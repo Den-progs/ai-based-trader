@@ -28,3 +28,6 @@ THREAD_WORKERS = 8
 
 # Sell all stock positions this many minutes before market close
 EOD_LIQUIDATE_MINUTES_BEFORE_CLOSE = 10
+
+# Minimum seconds between two BUY orders for the same symbol
+BUY_COOLDOWN_SECONDS = 600  # 10 minutes

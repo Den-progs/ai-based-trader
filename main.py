@@ -28,6 +28,7 @@ _eod_liquidated_on: str = ""
 # Prevents two threads from simultaneously deciding to free up cash and
 # selling the same position twice
 _buy_lock = threading.Lock()
+_last_buy: dict[str, float] = {}  # symbol -> timestamp of last buy
 
 
 def free_up_cash(needed: float, exclude_symbol: str) -> float:
@@ -76,22 +77,28 @@ def _process_stock(symbol: str, market_open: bool) -> None:
 
         if action == "BUY" and confidence >= config.CONFIDENCE_THRESHOLD:
             with _buy_lock:
-                held = get_position(symbol)
-                if held >= config.MAX_POSITION_SHARES:
-                    print(f"[stock][{symbol}] Max position reached ({held} shares), skipping BUY.")
+                since_last = time.time() - _last_buy.get(symbol, 0)
+                if since_last < config.BUY_COOLDOWN_SECONDS:
+                    wait = int(config.BUY_COOLDOWN_SECONDS - since_last)
+                    print(f"[stock][{symbol}] Cooldown — {wait}s left before next BUY.")
                 else:
-                    cost = price * config.QTY_PER_TRADE
-                    cash = get_account_cash()
-                    if cash < cost:
-                        print(f"[stock][{symbol}] Low cash (${cash:.2f}), selling worst positions to fund ${cost:.2f} trade.")
-                        freed = free_up_cash(needed=cost, exclude_symbol=symbol)
-                        if freed + cash < cost:
-                            print(f"[stock][{symbol}] Still not enough cash after rebalance, skipping.")
-                            return
-                    order = buy(symbol, config.QTY_PER_TRADE)
-                    msg = f"BUY {config.QTY_PER_TRADE}x {symbol} @ ${price:.2f} (held {held:.0f}) | {reason}"
-                    discord.send(msg)
-                    print(f"[stock][{symbol}] Order placed: {order}")
+                    held = get_position(symbol)
+                    if held >= config.MAX_POSITION_SHARES:
+                        print(f"[stock][{symbol}] Max position reached ({held} shares), skipping BUY.")
+                    else:
+                        cost = price * config.QTY_PER_TRADE
+                        cash = get_account_cash()
+                        if cash < cost:
+                            print(f"[stock][{symbol}] Low cash (${cash:.2f}), selling worst positions to fund ${cost:.2f} trade.")
+                            freed = free_up_cash(needed=cost, exclude_symbol=symbol)
+                            if freed + cash < cost:
+                                print(f"[stock][{symbol}] Still not enough cash after rebalance, skipping.")
+                                return
+                        order = buy(symbol, config.QTY_PER_TRADE)
+                        _last_buy[symbol] = time.time()
+                        msg = f"BUY {config.QTY_PER_TRADE}x {symbol} @ ${price:.2f} (held {held:.0f}) | {reason}"
+                        discord.send(msg)
+                        print(f"[stock][{symbol}] Order placed: {order}")
 
         elif action == "SELL" and confidence >= config.CONFIDENCE_THRESHOLD:
             held = get_position(symbol)
@@ -127,15 +134,21 @@ def _process_crypto(symbol: str) -> None:
         print(f"[crypto][{symbol}] ${price:.2f} → {action} (conf={confidence:.2f}) — {reason}")
 
         if action == "BUY" and confidence >= config.CONFIDENCE_THRESHOLD:
-            pos_value = get_position_value(symbol)
-            if pos_value >= config.MAX_CRYPTO_POSITION_VALUE:
-                print(f"[crypto][{symbol}] Max position value reached (${pos_value:.2f}), skipping BUY.")
+            since_last = time.time() - _last_buy.get(symbol, 0)
+            if since_last < config.BUY_COOLDOWN_SECONDS:
+                wait = int(config.BUY_COOLDOWN_SECONDS - since_last)
+                print(f"[crypto][{symbol}] Cooldown — {wait}s left before next BUY.")
             else:
-                qty = round(config.CRYPTO_TRADE_DOLLARS / price, 6)
-                order = buy(symbol, qty)
-                msg = f"BUY ${config.CRYPTO_TRADE_DOLLARS} of {symbol} ({qty} coins @ ${price:.2f}) | {reason}"
-                discord.send(msg)
-                print(f"[crypto][{symbol}] Order placed: {order}")
+                pos_value = get_position_value(symbol)
+                if pos_value >= config.MAX_CRYPTO_POSITION_VALUE:
+                    print(f"[crypto][{symbol}] Max position value reached (${pos_value:.2f}), skipping BUY.")
+                else:
+                    qty = round(config.CRYPTO_TRADE_DOLLARS / price, 6)
+                    order = buy(symbol, qty)
+                    _last_buy[symbol] = time.time()
+                    msg = f"BUY ${config.CRYPTO_TRADE_DOLLARS} of {symbol} ({qty} coins @ ${price:.2f}) | {reason}"
+                    discord.send(msg)
+                    print(f"[crypto][{symbol}] Order placed: {order}")
 
         elif action == "SELL" and confidence >= config.CONFIDENCE_THRESHOLD:
             held = get_position(symbol)
