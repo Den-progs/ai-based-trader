@@ -15,7 +15,11 @@ from alpaca.trading.enums import QueryOrderStatus
 from dotenv import load_dotenv
 
 import discord_notify as discord
-from coach_io import read_strategy, read_watchlist, write_strategy, write_watchlist
+from coach_io import (
+    read_strategy, read_watchlist, write_strategy, write_watchlist,
+    read_crypto_watchlist, write_crypto_watchlist,
+    read_pending_signals, clear_pending_signals,
+)
 from news import get_headlines
 
 load_dotenv()
@@ -36,18 +40,22 @@ PROMPT_TEMPLATE = """You are a trading coach reviewing paper trading performance
 
 Your job:
 1. Review the recent trades and identify what worked and what didn't
-2. Suggest an improved strategy for tomorrow (keep it simple and concrete)
-3. Pick 3-5 stock symbols for the watchlist based on the patterns you see
+2. Look at off-hours signals — what was Llama consistently wanting to do while the market was closed?
+3. Suggest an improved strategy for tomorrow (keep it simple and concrete)
+4. Pick 3-5 stock symbols for the watchlist
+5. Pick 1-3 crypto pairs for the crypto watchlist (e.g. BTC/USD, ETH/USD, SOL/USD)
 
 Rules:
 - Keep the strategy short (2-3 sentences max)
-- Only suggest well-known large-cap stocks (S&P 500)
+- Only suggest well-known large-cap stocks (S&P 500) for stocks
+- Only suggest major crypto pairs (BTC, ETH, SOL, etc.) for crypto
 - Be honest if there is not enough data yet
 
 Respond ONLY with a JSON object in this exact format (no extra text before or after):
 {{
   "strategy": "2-3 sentence strategy for tomorrow",
   "watchlist": ["SYMBOL1", "SYMBOL2", "SYMBOL3"],
+  "crypto_watchlist": ["BTC/USD", "ETH/USD"],
   "summary": "1-2 sentence review of what happened and why you made these changes"
 }}
 
@@ -57,13 +65,18 @@ Today's date: {date}
 
 Current strategy: {strategy}
 
-Current watchlist: {watchlist}
+Current stock watchlist: {watchlist}
+
+Current crypto watchlist: {crypto_watchlist}
 
 Open positions:
 {positions}
 
 Recent trades (last 7 days):
 {trades}
+
+Off-hours stock signals (what Llama wanted to do while market was closed):
+{pending_signals}
 
 Recent news:
 {news}"""
@@ -114,24 +127,39 @@ def get_positions() -> list[dict]:
         return []
 
 
-def ask_claude_code(trades: list[dict], positions: list[dict], strategy: str, watchlist: list[str]) -> dict:
+def ask_claude_code(
+    trades: list[dict],
+    positions: list[dict],
+    strategy: str,
+    watchlist: list[str],
+    crypto_watchlist: list[str],
+    pending_signals: list[dict],
+) -> dict:
     """
-    Send trade history + news to Claude Code CLI and parse the JSON response.
+    Send trade history + news + pending signals to Claude Code CLI and parse the JSON response.
     Uses `claude -p` (print mode) — non-interactive, exits after one response.
     """
-    # Gather headlines for every symbol on the watchlist
+    # Gather headlines for every symbol on both watchlists
+    all_symbols = watchlist + crypto_watchlist
     news_lines = []
-    for symbol in watchlist:
+    for symbol in all_symbols:
         for headline in get_headlines(symbol, max_headlines=3):
             news_lines.append(f"- [{symbol}] {headline}")
     news_text = "\n".join(news_lines) if news_lines else "No recent news found."
+
+    if pending_signals:
+        pending_text = json.dumps(pending_signals, indent=2)
+    else:
+        pending_text = "No off-hours signals recorded."
 
     prompt = PROMPT_TEMPLATE.format(
         date=datetime.now().strftime("%Y-%m-%d"),
         strategy=strategy,
         watchlist=watchlist,
+        crypto_watchlist=crypto_watchlist,
         positions=json.dumps(positions, indent=2) if positions else "None",
         trades=json.dumps(trades, indent=2) if trades else "No trades in the last 7 days.",
+        pending_signals=pending_text,
         news=news_text,
     )
 
@@ -169,11 +197,13 @@ def run() -> None:
     positions = get_positions()
     strategy = read_strategy()
     watchlist = read_watchlist()
+    crypto_watchlist = read_crypto_watchlist()
+    pending_signals = read_pending_signals()
 
-    print(f"[coach] {len(trades)} recent trades, {len(positions)} open positions.")
+    print(f"[coach] {len(trades)} recent trades, {len(positions)} open positions, {len(pending_signals)} pending signals.")
 
     try:
-        result = ask_claude_code(trades, positions, strategy, watchlist)
+        result = ask_claude_code(trades, positions, strategy, watchlist, crypto_watchlist, pending_signals)
     except Exception as e:
         msg = f"Daily coach error: {e}"
         print(f"[coach] {msg}")
@@ -182,19 +212,24 @@ def run() -> None:
 
     new_strategy = result.get("strategy", strategy)
     new_watchlist = result.get("watchlist", watchlist)
+    new_crypto_watchlist = result.get("crypto_watchlist", crypto_watchlist)
     summary = result.get("summary", "No summary provided.")
 
     write_strategy(new_strategy)
     write_watchlist(new_watchlist)
+    write_crypto_watchlist(new_crypto_watchlist)
+    clear_pending_signals()
 
     print(f"[coach] New strategy: {new_strategy}")
-    print(f"[coach] New watchlist: {new_watchlist}")
+    print(f"[coach] New stock watchlist: {new_watchlist}")
+    print(f"[coach] New crypto watchlist: {new_crypto_watchlist}")
     print(f"[coach] Summary: {summary}")
 
     discord.send(
         f"**Daily coach complete**\n"
         f"Summary: {summary}\n"
-        f"Watchlist: {', '.join(new_watchlist)}\n"
+        f"Stocks: {', '.join(new_watchlist)}\n"
+        f"Crypto: {', '.join(new_crypto_watchlist)}\n"
         f"Strategy: {new_strategy}"
     )
 

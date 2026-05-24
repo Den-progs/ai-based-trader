@@ -52,16 +52,22 @@ def ask_llama(symbol: str, price: float, news: list[str]) -> dict:
 
     raw_text = response.json().get("response", "")
 
-    # Extract JSON from the response (Llama sometimes adds extra text)
+    # Extract JSON from the response (Llama sometimes adds extra text or truncates)
     start = raw_text.find("{")
-    end = raw_text.rfind("}") + 1
-    if start == -1 or end == 0:
+    if start == -1:
         raise ValueError(f"No JSON found in Llama response: {raw_text!r}")
 
+    end = raw_text.rfind("}") + 1
+    chunk = raw_text[start:end] if end > 0 else raw_text[start:]
+
     try:
-        result = json.loads(raw_text[start:end])
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON from Llama: {raw_text!r}") from e
+        result = json.loads(chunk)
+    except json.JSONDecodeError:
+        # Llama sometimes cuts off before the closing brace — try closing it
+        try:
+            result = json.loads(chunk + "}")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON from Llama: {raw_text!r}") from e
 
     # Validate required fields
     action = result.get("action", "").upper()

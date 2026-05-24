@@ -26,6 +26,7 @@ ENV/
 
 # ===== Bot runtime data =====
 trade_journal.json
+pending_signals.json
 *.log
 logs/
 data/cache/

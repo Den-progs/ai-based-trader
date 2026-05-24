@@ -1,16 +1,23 @@
 """
-coach_io.py — reads/writes strategy.txt and watchlist.json
+coach_io.py — reads/writes strategy.txt, watchlist.json, crypto_watchlist.json,
+and pending_signals.json (off-hours stock signals saved for daily review).
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 STRATEGY_FILE = BASE_DIR / "strategy.txt"
 WATCHLIST_FILE = BASE_DIR / "watchlist.json"
+CRYPTO_WATCHLIST_FILE = BASE_DIR / "crypto_watchlist.json"
+PENDING_SIGNALS_FILE = BASE_DIR / "pending_signals.json"
 
 DEFAULT_STRATEGY = "Hold cash. Wait for a clear BUY signal with confidence >= 0.7 before entering."
 DEFAULT_WATCHLIST = ["AAPL", "MSFT", "NVDA"]
+DEFAULT_CRYPTO_WATCHLIST = ["BTC/USD", "ETH/USD"]
+
+MAX_PENDING_SIGNALS = 100  # cap so the file doesn't grow forever
 
 
 def read_strategy() -> str:
@@ -34,3 +41,48 @@ def read_watchlist() -> list[str]:
 
 def write_watchlist(symbols: list[str]) -> None:
     WATCHLIST_FILE.write_text(json.dumps(symbols, indent=2), encoding="utf-8")
+
+
+def read_crypto_watchlist() -> list[str]:
+    if CRYPTO_WATCHLIST_FILE.exists():
+        try:
+            return json.loads(CRYPTO_WATCHLIST_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"[coach_io] Could not read crypto_watchlist.json: {e}")
+    return DEFAULT_CRYPTO_WATCHLIST
+
+
+def write_crypto_watchlist(symbols: list[str]) -> None:
+    CRYPTO_WATCHLIST_FILE.write_text(json.dumps(symbols, indent=2), encoding="utf-8")
+
+
+def read_pending_signals() -> list[dict]:
+    """Return off-hours stock signals saved since the last daily review."""
+    if PENDING_SIGNALS_FILE.exists():
+        try:
+            return json.loads(PENDING_SIGNALS_FILE.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"[coach_io] Could not read pending_signals.json: {e}")
+    return []
+
+
+def append_pending_signal(symbol: str, action: str, confidence: float, reason: str, price: float) -> None:
+    """Save one off-hours signal. Keeps only the last MAX_PENDING_SIGNALS entries."""
+    signals = read_pending_signals()
+    signals.append({
+        "symbol": symbol,
+        "action": action,
+        "confidence": round(confidence, 3),
+        "reason": reason,
+        "price": round(price, 4),
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    })
+    # Trim to cap
+    if len(signals) > MAX_PENDING_SIGNALS:
+        signals = signals[-MAX_PENDING_SIGNALS:]
+    PENDING_SIGNALS_FILE.write_text(json.dumps(signals, indent=2), encoding="utf-8")
+
+
+def clear_pending_signals() -> None:
+    """Wipe pending signals after the daily coach has consumed them."""
+    PENDING_SIGNALS_FILE.write_text("[]", encoding="utf-8")

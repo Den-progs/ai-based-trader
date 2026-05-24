@@ -4,12 +4,13 @@ Always paper mode unless two env vars confirm live trading.
 """
 
 import os
+import time
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestQuoteRequest
+from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
+from alpaca.data.requests import StockLatestQuoteRequest, CryptoLatestQuoteRequest
 
 load_dotenv()
 
@@ -30,6 +31,7 @@ else:
 
 trading_client = TradingClient(API_KEY, API_SECRET, paper=PAPER)
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
+crypto_data_client = CryptoHistoricalDataClient(API_KEY, API_SECRET)
 
 
 def is_market_open() -> bool:
@@ -43,10 +45,31 @@ def is_market_open() -> bool:
 
 
 def get_price(symbol: str) -> float:
-    """Return the latest ask price for a symbol."""
-    request = StockLatestQuoteRequest(symbol_or_symbols=symbol)
-    quote = data_client.get_stock_latest_quote(request)
-    return float(quote[symbol].ask_price)
+    """Return the latest ask price for a stock symbol. Retries twice on connection errors."""
+    for attempt in range(3):
+        try:
+            request = StockLatestQuoteRequest(symbol_or_symbols=symbol)
+            quote = data_client.get_stock_latest_quote(request)
+            return float(quote[symbol].ask_price)
+        except Exception as e:
+            if attempt == 2:
+                raise
+            print(f"[trader] get_price({symbol}) failed (attempt {attempt + 1}), retrying: {e}")
+            time.sleep(2)
+
+
+def get_crypto_price(symbol: str) -> float:
+    """Return the latest ask price for a crypto pair. Retries twice on connection errors."""
+    for attempt in range(3):
+        try:
+            request = CryptoLatestQuoteRequest(symbol_or_symbols=symbol)
+            quote = crypto_data_client.get_crypto_latest_quote(request)
+            return float(quote[symbol].ask_price)
+        except Exception as e:
+            if attempt == 2:
+                raise
+            print(f"[trader] get_crypto_price({symbol}) failed (attempt {attempt + 1}), retrying: {e}")
+            time.sleep(2)
 
 
 def get_position(symbol: str) -> float:
@@ -59,24 +82,26 @@ def get_position(symbol: str) -> float:
 
 
 def buy(symbol: str, qty: float) -> dict:
-    """Submit a market buy order. Returns the order as a dict."""
+    """Submit a market buy order. Uses GTC for crypto (24/7), DAY for stocks."""
+    tif = TimeInForce.GTC if "/" in symbol else TimeInForce.DAY
     order_request = MarketOrderRequest(
         symbol=symbol,
         qty=qty,
         side=OrderSide.BUY,
-        time_in_force=TimeInForce.DAY,
+        time_in_force=tif,
     )
     order = trading_client.submit_order(order_request)
     return {"id": str(order.id), "symbol": symbol, "qty": qty, "side": "BUY"}
 
 
 def sell(symbol: str, qty: float) -> dict:
-    """Submit a market sell order. Returns the order as a dict."""
+    """Submit a market sell order. Uses GTC for crypto (24/7), DAY for stocks."""
+    tif = TimeInForce.GTC if "/" in symbol else TimeInForce.DAY
     order_request = MarketOrderRequest(
         symbol=symbol,
         qty=qty,
         side=OrderSide.SELL,
-        time_in_force=TimeInForce.DAY,
+        time_in_force=tif,
     )
     order = trading_client.submit_order(order_request)
     return {"id": str(order.id), "symbol": symbol, "qty": qty, "side": "SELL"}
