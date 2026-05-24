@@ -78,6 +78,36 @@ def close_all_stock_positions() -> list[str]:
     return closed
 
 
+def get_account_cash() -> float:
+    """Return available buying power in the account."""
+    try:
+        account = trading_client.get_account()
+        return float(account.cash)
+    except Exception as e:
+        print(f"[trader] Could not fetch account cash: {e}")
+        return 0.0
+
+
+def get_stock_positions_by_pl() -> list[dict]:
+    """Return open stock positions sorted by unrealized P&L ascending (worst performers first)."""
+    try:
+        positions = trading_client.get_all_positions()
+        stock_positions = [
+            {
+                "symbol": p.symbol,
+                "qty": float(p.qty),
+                "market_value": float(p.market_value),
+                "unrealized_pl": float(p.unrealized_pl),
+            }
+            for p in positions
+            if "/" not in p.symbol  # exclude crypto
+        ]
+        return sorted(stock_positions, key=lambda x: x["unrealized_pl"])
+    except Exception as e:
+        print(f"[trader] Could not fetch positions: {e}")
+        return []
+
+
 def get_price(symbol: str) -> float:
     """Return the latest ask price for a stock symbol. Retries twice on connection errors."""
     for attempt in range(3):

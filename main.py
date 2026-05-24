@@ -8,6 +8,7 @@ Off-hours stock signals saved to pending_signals.json for the daily review.
 """
 
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import config
@@ -15,6 +16,7 @@ import discord_notify as discord
 from trader import (
     get_price, get_crypto_price, get_position,
     buy, sell, is_market_open, is_near_close, close_all_stock_positions,
+    get_account_cash, get_stock_positions_by_pl,
 )
 from llama_brain import ask_llama
 from news import get_headlines
@@ -22,6 +24,36 @@ from coach_io import read_watchlist, read_crypto_watchlist, append_pending_signa
 
 # Tracks whether we've already liquidated today so we don't spam sell orders
 _eod_liquidated_on: str = ""
+
+# Prevents two threads from simultaneously deciding to free up cash and
+# selling the same position twice
+_buy_lock = threading.Lock()
+
+
+def free_up_cash(needed: float, exclude_symbol: str) -> float:
+    """
+    Sell worst-performing stock positions (by unrealized P&L) until we've freed
+    at least `needed` dollars. Skips `exclude_symbol` (the stock we're about to buy).
+    Returns the total market value of what was sold.
+    """
+    freed = 0.0
+    positions = get_stock_positions_by_pl()  # worst P&L first
+
+    for pos in positions:
+        if freed >= needed:
+            break
+        if pos["symbol"] == exclude_symbol:
+            continue
+        try:
+            sell(pos["symbol"], pos["qty"])
+            freed += pos["market_value"]
+            pl = pos["unrealized_pl"]
+            print(f"[main] Sold {pos['symbol']} (P&L ${pl:+.2f}) to fund new trade")
+            discord.send(f"REBALANCE: sold {pos['symbol']} (P&L ${pl:+.2f}) to free cash")
+        except Exception as e:
+            print(f"[main] Could not sell {pos['symbol']} during rebalance: {e}")
+
+    return freed
 
 
 def _process_stock(symbol: str, market_open: bool) -> None:
@@ -43,14 +75,23 @@ def _process_stock(symbol: str, market_open: bool) -> None:
             return
 
         if action == "BUY" and confidence >= config.CONFIDENCE_THRESHOLD:
-            held = get_position(symbol)
-            if held >= config.MAX_POSITION_SHARES:
-                print(f"[stock][{symbol}] Max position reached ({held} shares), skipping BUY.")
-            else:
-                order = buy(symbol, config.QTY_PER_TRADE)
-                msg = f"BUY {config.QTY_PER_TRADE}x {symbol} @ ${price:.2f} (held {held:.0f}) | {reason}"
-                discord.send(msg)
-                print(f"[stock][{symbol}] Order placed: {order}")
+            with _buy_lock:
+                held = get_position(symbol)
+                if held >= config.MAX_POSITION_SHARES:
+                    print(f"[stock][{symbol}] Max position reached ({held} shares), skipping BUY.")
+                else:
+                    cost = price * config.QTY_PER_TRADE
+                    cash = get_account_cash()
+                    if cash < cost:
+                        print(f"[stock][{symbol}] Low cash (${cash:.2f}), selling worst positions to fund ${cost:.2f} trade.")
+                        freed = free_up_cash(needed=cost, exclude_symbol=symbol)
+                        if freed + cash < cost:
+                            print(f"[stock][{symbol}] Still not enough cash after rebalance, skipping.")
+                            return
+                    order = buy(symbol, config.QTY_PER_TRADE)
+                    msg = f"BUY {config.QTY_PER_TRADE}x {symbol} @ ${price:.2f} (held {held:.0f}) | {reason}"
+                    discord.send(msg)
+                    print(f"[stock][{symbol}] Order placed: {order}")
 
         elif action == "SELL" and confidence >= config.CONFIDENCE_THRESHOLD:
             held = get_position(symbol)
