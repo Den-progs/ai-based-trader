@@ -31,3 +31,7 @@ EOD_LIQUIDATE_MINUTES_BEFORE_CLOSE = 10
 
 # Minimum seconds between two BUY orders for the same symbol
 BUY_COOLDOWN_SECONDS = 600  # 10 minutes
+
+# Auto-sell a position when unrealized profit hits this dollar amount
+# Set to 0 to disable
+TAKE_PROFIT_DOLLARS = 150

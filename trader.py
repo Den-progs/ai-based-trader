@@ -154,6 +154,15 @@ def get_position_value(symbol: str) -> float:
         return 0.0
 
 
+def get_position_pl(symbol: str) -> float:
+    """Return unrealized profit/loss in dollars for our position. 0.0 if no position."""
+    try:
+        position = trading_client.get_open_position(symbol)
+        return float(position.unrealized_pl)
+    except Exception:
+        return 0.0
+
+
 def buy(symbol: str, qty: float) -> dict:
     """Submit a market buy order. Uses GTC for crypto (24/7), DAY for stocks."""
     tif = TimeInForce.GTC if "/" in symbol else TimeInForce.DAY

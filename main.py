@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import config
 import discord_notify as discord
 from trader import (
-    get_price, get_crypto_price, get_position, get_position_value,
+    get_price, get_crypto_price, get_position, get_position_value, get_position_pl,
     buy, sell, is_market_open, is_near_close, close_all_stock_positions,
     get_account_cash, get_stock_positions_by_pl,
 )
@@ -60,6 +60,18 @@ def free_up_cash(needed: float, exclude_symbol: str) -> float:
 def _process_stock(symbol: str, market_open: bool) -> None:
     """Analyse one stock and act. Runs inside a thread."""
     try:
+        # Take-profit: sell everything if we're up enough, skip Llama entirely
+        if market_open and config.TAKE_PROFIT_DOLLARS > 0:
+            pl = get_position_pl(symbol)
+            if pl >= config.TAKE_PROFIT_DOLLARS:
+                held = get_position(symbol)
+                if held > 0:
+                    order = sell(symbol, held)
+                    msg = f"TAKE PROFIT {symbol} — P&L ${pl:+.2f}, sold {held} shares"
+                    discord.send(msg)
+                    print(f"[stock][{symbol}] {msg}")
+                    return
+
         price = get_price(symbol)
         decision = ask_llama(symbol, price, news=get_headlines(symbol))
 
@@ -124,6 +136,18 @@ def _process_stock(symbol: str, market_open: bool) -> None:
 def _process_crypto(symbol: str) -> None:
     """Analyse one crypto pair and act. Runs inside a thread."""
     try:
+        # Take-profit: sell everything if we're up enough, skip Llama entirely
+        if config.TAKE_PROFIT_DOLLARS > 0:
+            pl = get_position_pl(symbol)
+            if pl >= config.TAKE_PROFIT_DOLLARS:
+                held = get_position(symbol)
+                if held > 0:
+                    order = sell(symbol, held)
+                    msg = f"TAKE PROFIT {symbol} — P&L ${pl:+.2f}, sold {held} coins"
+                    discord.send(msg)
+                    print(f"[crypto][{symbol}] {msg}")
+                    return
+
         price = get_crypto_price(symbol)
         decision = ask_llama(symbol, price, news=get_headlines(symbol))
 
