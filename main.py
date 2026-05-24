@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import config
 import discord_notify as discord
 from trader import (
-    get_price, get_crypto_price, get_position,
+    get_price, get_crypto_price, get_position, get_position_value,
     buy, sell, is_market_open, is_near_close, close_all_stock_positions,
     get_account_cash, get_stock_positions_by_pl,
 )
@@ -127,21 +127,23 @@ def _process_crypto(symbol: str) -> None:
         print(f"[crypto][{symbol}] ${price:.2f} → {action} (conf={confidence:.2f}) — {reason}")
 
         if action == "BUY" and confidence >= config.CONFIDENCE_THRESHOLD:
-            held = get_position(symbol)
-            if held >= config.MAX_POSITION_SHARES:
-                print(f"[crypto][{symbol}] Max position reached, skipping BUY.")
+            pos_value = get_position_value(symbol)
+            if pos_value >= config.MAX_CRYPTO_POSITION_VALUE:
+                print(f"[crypto][{symbol}] Max position value reached (${pos_value:.2f}), skipping BUY.")
             else:
-                order = buy(symbol, config.QTY_PER_TRADE)
-                msg = f"BUY {config.QTY_PER_TRADE}x {symbol} @ ${price:.2f} | {reason}"
+                qty = round(config.CRYPTO_TRADE_DOLLARS / price, 6)
+                order = buy(symbol, qty)
+                msg = f"BUY ${config.CRYPTO_TRADE_DOLLARS} of {symbol} ({qty} coins @ ${price:.2f}) | {reason}"
                 discord.send(msg)
                 print(f"[crypto][{symbol}] Order placed: {order}")
 
         elif action == "SELL" and confidence >= config.CONFIDENCE_THRESHOLD:
             held = get_position(symbol)
             if held > 0:
-                qty = min(config.QTY_PER_TRADE, held)
+                sell_qty = round(config.CRYPTO_TRADE_DOLLARS / price, 6)
+                qty = min(sell_qty, held)
                 order = sell(symbol, qty)
-                msg = f"SELL {qty}x {symbol} @ ${price:.2f} | {reason}"
+                msg = f"SELL {qty} {symbol} @ ${price:.2f} | {reason}"
                 discord.send(msg)
                 print(f"[crypto][{symbol}] Order placed: {order}")
             else:

@@ -137,10 +137,19 @@ def get_crypto_price(symbol: str) -> float:
 
 
 def get_position(symbol: str) -> float:
-    """Return how many shares we hold. Returns 0.0 if no position."""
+    """Return how many shares/coins we hold. Returns 0.0 if no position."""
     try:
         position = trading_client.get_open_position(symbol)
         return float(position.qty)
+    except Exception:
+        return 0.0
+
+
+def get_position_value(symbol: str) -> float:
+    """Return current market value in dollars of our position. 0.0 if no position."""
+    try:
+        position = trading_client.get_open_position(symbol)
+        return float(position.market_value)
     except Exception:
         return 0.0
 
