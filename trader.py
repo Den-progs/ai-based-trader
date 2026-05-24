@@ -35,6 +35,12 @@ data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 crypto_data_client = CryptoHistoricalDataClient(API_KEY, API_SECRET)
 
 
+def _is_crypto(symbol: str) -> bool:
+    """Alpaca returns positions as ETHUSD (no slash) but we trade as ETH/USD.
+    Treat anything ending in USD with no slash as crypto too."""
+    return "/" in symbol or symbol.endswith("USD")
+
+
 def is_market_open() -> bool:
     """Return True if the NYSE is currently open for trading."""
     try:
@@ -68,7 +74,7 @@ def close_all_stock_positions() -> list[str]:
 
     closed = []
     for p in positions:
-        if "/" in p.symbol:  # skip crypto — it trades 24/7
+        if _is_crypto(p.symbol):  # skip crypto — it trades 24/7
             continue
         try:
             sell(p.symbol, float(p.qty))
@@ -100,7 +106,7 @@ def get_stock_positions_by_pl() -> list[dict]:
                 "unrealized_pl": float(p.unrealized_pl),
             }
             for p in positions
-            if "/" not in p.symbol  # exclude crypto
+            if not _is_crypto(p.symbol)  # exclude crypto
         ]
         return sorted(stock_positions, key=lambda x: x["unrealized_pl"])
     except Exception as e:
@@ -183,7 +189,7 @@ def get_all_positions() -> list[dict]:
 
 def buy(symbol: str, qty: float) -> dict:
     """Submit a market buy order. Uses GTC for crypto (24/7), DAY for stocks."""
-    tif = TimeInForce.GTC if "/" in symbol else TimeInForce.DAY
+    tif = TimeInForce.GTC if _is_crypto(symbol) else TimeInForce.DAY
     order_request = MarketOrderRequest(
         symbol=symbol,
         qty=qty,
@@ -196,7 +202,7 @@ def buy(symbol: str, qty: float) -> dict:
 
 def sell(symbol: str, qty: float) -> dict:
     """Submit a market sell order. Uses GTC for crypto (24/7), DAY for stocks."""
-    tif = TimeInForce.GTC if "/" in symbol else TimeInForce.DAY
+    tif = TimeInForce.GTC if _is_crypto(symbol) else TimeInForce.DAY
     order_request = MarketOrderRequest(
         symbol=symbol,
         qty=qty,
