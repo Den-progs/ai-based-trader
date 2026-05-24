@@ -1,0 +1,184 @@
+AI TRADER BOT — WHAT EVERY SCRIPT DOES
+========================================
+
+
+config.py
+---------
+The settings file. All the numbers that control how the bot behaves live here.
+Nothing else is supposed to have hardcoded numbers — they all import from here.
+
+  LOOP_INTERVAL = 30          How many seconds between each trading cycle
+  QTY_PER_TRADE = 3           How many shares to buy or sell per stock order
+  MAX_POSITION_SHARES = 15    Max shares we'll hold in a single stock at once
+  CRYPTO_TRADE_DOLLARS = 300  How many dollars to spend per crypto buy
+  MAX_CRYPTO_POSITION_VALUE = 2000  Max dollar value we'll hold in one crypto
+  CONFIDENCE_THRESHOLD = 0.70 Llama must be at least 70% confident to act
+  THREAD_WORKERS = 4          How many stocks/cryptos to analyse at the same time
+  EOD_LIQUIDATE_MINUTES_BEFORE_CLOSE = 10  Sell all stocks this many minutes before close
+  BUY_COOLDOWN_SECONDS = 600  Wait 10 minutes between buying the same symbol again
+  TAKE_PROFIT_DOLLARS = 150   Auto-sell a position when profit hits $150
+
+
+trader.py
+---------
+All the code that talks to Alpaca (the brokerage). Everything is paper trading
+by default — real money only works if two specific environment variables are set.
+
+Functions it provides:
+  is_market_open()            Asks Alpaca if NYSE is open right now
+  is_near_close(minutes)      Returns True if market closes within X minutes
+  get_price(symbol)           Gets the latest stock price (retries 3x on error)
+  get_crypto_price(symbol)    Gets the latest crypto price (retries 3x on error)
+  get_position(symbol)        How many shares/coins we currently hold
+  get_position_value(symbol)  Dollar value of our current position
+  get_position_pl(symbol)     Unrealized profit or loss on our position in dollars
+  get_account_cash()          How much cash is available to spend
+  get_all_positions()         Returns all open positions (stocks + crypto)
+  get_stock_positions_by_pl() Returns stock positions sorted worst-to-best profit
+  buy(symbol, qty)            Places a market buy order
+  sell(symbol, qty)           Places a market sell order
+  close_all_stock_positions() Sells every stock we own (used at end of day)
+
+One important detail: Alpaca uses "GTC" (Good Till Cancelled) order type for
+crypto and "DAY" for stocks. The _is_crypto() helper figures out which is which
+by checking if the symbol contains "/" or ends in "USD".
+
+
+llama_brain.py
+--------------
+The AI decision maker. Sends stock/crypto info to the local Llama 3.2 model
+running on your machine via Ollama, and gets back a BUY/SELL/HOLD decision.
+
+How it works:
+  1. Builds a prompt with the symbol name, current price, and recent news headlines
+  2. Sends it to Ollama at http://localhost:11434 (must be running locally)
+  3. Llama responds with JSON: { "action": "BUY", "confidence": 0.82, "reason": "..." }
+  4. The code parses that JSON and returns it
+
+Quirk handled: Llama sometimes cuts off before the closing "}" in the JSON.
+The code catches that and tries adding "}" to fix it before giving up.
+
+If Ollama is not running, it raises a ConnectionError which main.py catches
+and logs to Discord.
+
+
+discord_notify.py
+-----------------
+Sends messages to a Discord channel via a webhook URL.
+The webhook URL comes from the DISCORD_WEBHOOK_URL variable in your .env file.
+
+Only one function: send(message)
+  - If the webhook URL is missing, it just prints a warning and does nothing
+  - If the request fails, it logs to the console but does not crash the bot
+
+
+news.py
+-------
+Fetches recent news headlines for a stock or crypto symbol from two sources
+at the same time, then combines the results.
+
+Sources:
+  1. Alpaca News API — financial news, requires your Alpaca API key
+  2. Google News RSS  — free, no key needed, uses built-in Python XML parser
+
+How it works:
+  - Both sources are fetched in parallel (using threads) to save time
+  - Results are cached for 5 minutes per symbol so the bot doesn't spam the APIs
+  - The cache is shared across threads with a lock so there are no race conditions
+
+Used by: main.py passes headlines to Llama for every symbol it analyses.
+         daily_coach.py uses it to include news context in Claude's daily review.
+
+
+coach_io.py
+-----------
+Reads and writes all the files that store the bot's state between runs.
+Think of it as the bot's memory on disk.
+
+Files it manages:
+  strategy.txt           The current trading strategy written by Claude
+  watchlist.json         List of stock symbols to analyse (e.g. ["AAPL", "NVDA"])
+  crypto_watchlist.json  List of crypto pairs to trade (e.g. ["BTC/USD", "ETH/USD"])
+  pending_signals.json   Off-hours stock signals saved for the daily review
+  last_buy.json          Timestamps of the last buy per symbol (so cooldowns
+                         survive if the bot restarts)
+
+Key safety: appending pending signals is wrapped in a threading lock so two
+threads can't corrupt the file at the same time.
+
+
+main.py
+-------
+The main trading loop. This is the file you run to start the bot.
+It runs forever, cycling every 30 seconds (configurable in config.py).
+
+What happens each cycle:
+  1. Read the current watchlist and crypto watchlist from disk
+  2. Check if the stock market is open
+  3. If near market close: sell all stock positions (EOD liquidation)
+  4. Otherwise: analyse all stocks and all crypto in parallel threads
+
+For each stock:
+  - If profit >= $150: sell immediately, skip Llama
+  - Get the current price and latest news
+  - Ask Llama: BUY, SELL, or HOLD?
+  - If market is closed: save BUY/SELL signals to pending_signals.json
+  - If market is open and action is BUY:
+      - Check 10-minute cooldown (prevents buying same stock repeatedly)
+      - Check we don't already hold the max shares
+      - Check if we have enough cash; if not, sell worst stock positions to fund it
+      - Place the buy order, save the timestamp to last_buy.json
+  - If action is SELL: sell up to QTY_PER_TRADE shares we currently hold
+
+For each crypto (same logic, but 24/7 — no market hours check):
+  - If profit >= $150: sell immediately
+  - Ask Llama: BUY, SELL, or HOLD?
+  - Check cooldown, check dollar position limit, place order
+
+On startup: checks all open positions and immediately sells any that are
+already above the $150 take-profit threshold (in case the bot was off overnight).
+
+Every trade and error is sent to Discord.
+
+
+daily_coach.py
+--------------
+Runs once a day (you run it manually or schedule it with cron/Task Scheduler).
+Uses Claude (the smart AI) to review the past week of trades and decide what
+to trade tomorrow.
+
+What it does:
+  1. Pulls the last 7 days of closed orders from Alpaca
+  2. Reads current open positions, strategy, watchlist, pending signals, and news
+  3. Builds a big prompt and sends it to Claude via the Claude Code CLI (claude -p)
+  4. Claude responds with JSON: new strategy, new stock watchlist, new crypto watchlist
+  5. Saves all of that to disk (strategy.txt, watchlist.json, crypto_watchlist.json)
+  6. Clears pending_signals.json since they've now been reviewed
+  7. Sends a summary to Discord
+
+This is the "think slow" part of the bot. Llama (fast, local, cheap) makes
+quick decisions every 30 seconds. Claude (smart, cloud) reviews everything
+once a day and sets the direction for tomorrow.
+
+
+========================================
+HOW THEY ALL FIT TOGETHER
+
+  You run:    python main.py          (runs forever, trades every 30s)
+  You run:    python daily_coach.py   (once a day, picks tomorrow's stocks)
+
+  main.py uses:
+    trader.py       to place orders on Alpaca
+    llama_brain.py  to get BUY/SELL/HOLD decisions
+    news.py         to get headlines for context
+    coach_io.py     to read the watchlist and save signals/cooldowns
+    discord_notify  to send trade alerts
+    config.py       for all the settings
+
+  daily_coach.py uses:
+    coach_io.py     to read/write strategy and watchlists
+    news.py         to give Claude current headlines
+    discord_notify  to post the daily summary
+    config.py       (indirectly via coach_io defaults)
+
+  All secrets (API keys, Discord webhook) live in .env and are NEVER committed.
