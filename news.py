@@ -6,6 +6,8 @@ news.py — fetch headlines from three sources in parallel:
 """
 
 import os
+import time
+import threading
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -25,6 +27,12 @@ _alpaca_client = NewsClient(
 )
 
 _REDDIT_HEADERS = {"User-Agent": "ai-trader-bot/1.0"}
+
+# Cache headlines per symbol for 2 minutes so we don't hammer Reddit/Google
+# every 5-second cycle with 65 symbols
+_cache: dict[str, tuple[float, list[str]]] = {}
+_cache_lock = threading.Lock()
+CACHE_TTL = 120  # seconds
 
 
 def _alpaca(symbol: str, n: int) -> list[str]:
@@ -96,8 +104,16 @@ def _reddit(symbol: str, n: int) -> list[str]:
 def get_headlines(symbol: str, max_headlines: int = 5) -> list[str]:
     """
     Return headlines from Alpaca + Google News + Reddit, fetched in parallel.
-    Each source contributes up to max_headlines. Returns [] if everything fails.
+    Results are cached per symbol for CACHE_TTL seconds to avoid rate-limiting
+    Reddit and Google when the same symbol is processed every few seconds.
     """
+    now = time.time()
+    with _cache_lock:
+        if symbol in _cache:
+            ts, cached = _cache[symbol]
+            if now - ts < CACHE_TTL:
+                return cached
+
     with ThreadPoolExecutor(max_workers=3) as pool:
         f_alpaca = pool.submit(_alpaca, symbol, max_headlines)
         f_google = pool.submit(_google, symbol, max_headlines)
@@ -109,4 +125,8 @@ def get_headlines(symbol: str, max_headlines: int = 5) -> list[str]:
             results.extend(f.result())
         except Exception:
             pass
+
+    with _cache_lock:
+        _cache[symbol] = (now, results)
+
     return results

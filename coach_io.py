@@ -4,6 +4,7 @@ and pending_signals.json (off-hours stock signals saved for daily review).
 """
 
 import json
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,6 +23,7 @@ DEFAULT_CRYPTO_WATCHLIST = [
 ]
 
 MAX_PENDING_SIGNALS = 100  # cap so the file doesn't grow forever
+_signals_lock = threading.Lock()  # prevents concurrent file writes from multiple threads
 
 
 def read_strategy() -> str:
@@ -71,20 +73,20 @@ def read_pending_signals() -> list[dict]:
 
 
 def append_pending_signal(symbol: str, action: str, confidence: float, reason: str, price: float) -> None:
-    """Save one off-hours signal. Keeps only the last MAX_PENDING_SIGNALS entries."""
-    signals = read_pending_signals()
-    signals.append({
-        "symbol": symbol,
-        "action": action,
-        "confidence": round(confidence, 3),
-        "reason": reason,
-        "price": round(price, 4),
-        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    })
-    # Trim to cap
-    if len(signals) > MAX_PENDING_SIGNALS:
-        signals = signals[-MAX_PENDING_SIGNALS:]
-    PENDING_SIGNALS_FILE.write_text(json.dumps(signals, indent=2), encoding="utf-8")
+    """Save one off-hours signal. Thread-safe. Keeps only the last MAX_PENDING_SIGNALS entries."""
+    with _signals_lock:
+        signals = read_pending_signals()
+        signals.append({
+            "symbol": symbol,
+            "action": action,
+            "confidence": round(confidence, 3),
+            "reason": reason,
+            "price": round(price, 4),
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+        if len(signals) > MAX_PENDING_SIGNALS:
+            signals = signals[-MAX_PENDING_SIGNALS:]
+        PENDING_SIGNALS_FILE.write_text(json.dumps(signals, indent=2), encoding="utf-8")
 
 
 def clear_pending_signals() -> None:
