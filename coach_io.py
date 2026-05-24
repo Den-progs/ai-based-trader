@@ -15,7 +15,11 @@ PENDING_SIGNALS_FILE = BASE_DIR / "pending_signals.json"
 
 DEFAULT_STRATEGY = "Hold cash. Wait for a clear BUY signal with confidence >= 0.7 before entering."
 DEFAULT_WATCHLIST = ["AAPL", "MSFT", "NVDA"]
-DEFAULT_CRYPTO_WATCHLIST = ["BTC/USD", "ETH/USD"]
+DEFAULT_CRYPTO_WATCHLIST = [
+    "BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "DOGE/USD",
+    "AVAX/USD", "LINK/USD", "ADA/USD", "DOT/USD", "LTC/USD",
+    "BCH/USD", "UNI/USD", "AAVE/USD", "POL/USD", "ARB/USD",
+]
 
 MAX_PENDING_SIGNALS = 100  # cap so the file doesn't grow forever
 
